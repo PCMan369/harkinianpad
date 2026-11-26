@@ -21,7 +21,7 @@ workflows:
           min_cmake=3.26.0
           cmake_ok() {
             command -v cmake >/dev/null &&
-              [ "$(printf '%s\\n%s\\n' "$min_cmake" "$(cmake --version | awk 'NR==1{print $3}')" | sort -V | head -n1)" = "$min_cmake" ]
+              [ "$(printf '%s\n%s\n' "$min_cmake" "$(cmake --version | awk 'NR==1{print $3}')" | sort -V | head -n1)" = "$min_cmake" ]
           }
           if ! cmake_ok; then
             if brew list --formula cmake >/dev/null 2>&1; then
@@ -97,13 +97,13 @@ workflows:
             trap - EXIT
             set +e
             mkdir -p ci-diagnostics
-            find build-ios-soh -type f \\
-              \\( -name CMakeCache.txt \\
-                 -o -name CMakeConfigureLog.yaml \\
-                 -o -name CMakeSystem.cmake \\
-                 -o -name CMakeCXXCompiler.cmake \\
-                 -o -name '*.LinkFileList' \\
-              \\) -print > ci-logs/cmake-diagnostic-file-list.txt 2>/dev/null
+            find build-ios-soh -type f \
+              \( -name CMakeCache.txt \
+                 -o -name CMakeConfigureLog.yaml \
+                 -o -name CMakeSystem.cmake \
+                 -o -name CMakeCXXCompiler.cmake \
+                 -o -name '*.LinkFileList' \
+              \) -print > ci-logs/cmake-diagnostic-file-list.txt 2>/dev/null
             while IFS= read -r file; do
               [ -f "$file" ] || continue
               relative="${file#"$PWD"/}"
@@ -135,9 +135,9 @@ workflows:
           grep -F 'Anchor' ci-logs/harkinianpad-nm.txt > ci-logs/anchor-symbols.txt
 
           lipo -info "$binary" | tee ci-logs/binary-architecture.txt
-          /usr/libexec/PlistBuddy -c 'Print :NSLocalNetworkUsageDescription' "$app/Info.plist" \\
+          /usr/libexec/PlistBuddy -c 'Print :NSLocalNetworkUsageDescription' "$app/Info.plist" \
             | tee ci-logs/local-network-permission.txt
-          cp "$CM_BUILD_DIR/build-ios-soh/soh/Release-iphoneos/HarkinianPad.build.json" \\
+          cp "$CM_BUILD_DIR/build-ios-soh/soh/Release-iphoneos/HarkinianPad.build.json" \
             ci-logs/HarkinianPad.build.json
 
           {
