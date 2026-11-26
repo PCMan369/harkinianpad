@@ -334,25 +334,7 @@ workflows:
           test -f "$binary"
           test ! -e "$packaged_app/_CodeSignature"
           test ! -f "$packaged_app/embedded.mobileprovision"
-          vtool -show-build "$binary" | grep -Eq 'platform +IOS
-          /usr/libexec/PlistBuddy -c 'Print :NSLocalNetworkUsageDescription' "$packaged_app/Info.plist" \
-            | tee ci-logs/ipa-local-network-permission.txt
-          shasum -a 256 "$ipa" | tee ci-logs/ipa-sha256.txt
-
-          {
-            echo "unsigned_ipa: $ipa"
-            echo "IPA archive: valid"
-            echo "ARM64 iOS device app: verified"
-            echo "Anchor and SDL2_net: verified in the packaged build"
-            echo "Apple signing material: absent"
-            echo "ROM and ROM-derived data: rejected by package-ios.sh audit"
-          } | tee ci-logs/ipa-check.txt
-
-    artifacts:
-      - artifacts/*.ipa
-      - ci-logs/*
-      - ci-diagnostics.tar.gz
-
+          vtool -show-build "$binary" | grep -Eq 'platform +IOS$'
           lipo -verify_arch arm64 "$binary"
           xcrun nm "$binary" > ci-logs/ipa-nm.txt
           grep -F 'SDLNet_TCP_Open' ci-logs/ipa-nm.txt > ci-logs/ipa-sdl2-net-symbols.txt
