@@ -284,7 +284,7 @@ workflows:
           grep -F 'SDLNet_TCP_Open' ci-logs/harkinianpad-nm.txt > ci-logs/sdl2-net-symbols.txt
           grep -F 'Anchor' ci-logs/harkinianpad-nm.txt > ci-logs/anchor-symbols.txt
 
-          lipo -verify_arch arm64 "$binary"
+          lipo "$binary" -verify_arch arm64
           lipo -info "$binary" | tee ci-logs/binary-architecture.txt
           /usr/libexec/PlistBuddy -c 'Print :NSLocalNetworkUsageDescription' "$app/Info.plist" \
             | tee ci-logs/local-network-permission.txt
@@ -335,7 +335,7 @@ workflows:
           test ! -e "$packaged_app/_CodeSignature"
           test ! -f "$packaged_app/embedded.mobileprovision"
           vtool -show-build "$binary" | grep -Eq 'platform +IOS$'
-          lipo -verify_arch arm64 "$binary"
+          lipo "$binary" -verify_arch arm64
           xcrun nm "$binary" > ci-logs/ipa-nm.txt
           grep -F 'SDLNet_TCP_Open' ci-logs/ipa-nm.txt > ci-logs/ipa-sdl2-net-symbols.txt
           grep -F 'Anchor' ci-logs/ipa-nm.txt > ci-logs/ipa-anchor-symbols.txt
