@@ -1,0 +1,152 @@
+workflows:
+  harkinianpad-anchor-ios-symbol-check:
+    name: HarkinianPad Anchor iOS (unsigned compile + symbols)
+    instance_type: mac_mini_m2
+    max_build_duration: 120
+
+    environment:
+      xcode: 26.3
+
+    scripts:
+      - name: Verify build environment
+        script: |
+          set -euo pipefail
+          mkdir -p ci-logs
+          xcodebuild -version | tee ci-logs/xcode-version.txt
+          xcrun --version | tee ci-logs/xcrun-version.txt
+          git --version
+          python3 --version
+
+          # The pinned Shipwright CMakeLists.txt requires CMake >= 3.26.
+          min_cmake=3.26.0
+          cmake_ok() {
+            command -v cmake >/dev/null &&
+              [ "$(printf '%s\\n%s\\n' "$min_cmake" "$(cmake --version | awk 'NR==1{print $3}')" | sort -V | head -n1)" = "$min_cmake" ]
+          }
+          if ! cmake_ok; then
+            if brew list --formula cmake >/dev/null 2>&1; then
+              brew upgrade cmake
+            else
+              brew install cmake
+            fi
+            export PATH="$(brew --prefix)/bin:$PATH"
+            hash -r
+          fi
+          cmake_ok || {
+            echo "CMake >= $min_cmake required, found: $(command -v cmake || echo none)" >&2
+            exit 1
+          }
+          # Preserve the verified CMake path for later Codemagic script steps.
+          echo "PATH=$(dirname "$(command -v cmake)"):$PATH" >> "$CM_ENV"
+          command -v cmake | tee ci-logs/cmake-path.txt
+          cmake --version | tee ci-logs/cmake-version.txt
+          df -h "$CM_BUILD_DIR"
+
+      - name: Repository safety check
+        script: |
+          set -euo pipefail
+          scripts/check-repo-safety.sh 2>&1 | tee ci-logs/repository-safety.log
+
+      - name: Fetch and verify pinned sources
+        script: |
+          set -euo pipefail
+          scripts/clone-sources.sh 2>&1 | tee ci-logs/clone-sources.log
+          scripts/verify-sources.py 2>&1 | tee ci-logs/verify-sources.log
+
+      - name: Record source identity
+        script: |
+          set -euo pipefail
+          {
+            echo "repository: $(git remote get-url origin)"
+            echo "branch: $(git branch --show-current)"
+            echo "harkinianpad_commit: $(git rev-parse HEAD)"
+            git log -1 --format='subject: %s%ncommit_date: %cI'
+            echo "codemagic_build_id: ${CM_BUILD_ID:-unset}"
+            echo "codemagic_commit: ${CM_COMMIT:-unset}"
+            echo "Shipwright commit: $(git -C sources/Shipwright rev-parse HEAD)"
+            echo "SDL2_net pin: 669e75b84632e2c6cc5c65974ec9e28052cb7a4e"
+            echo "sources.lock.json sha256: $(shasum -a 256 sources.lock.json | cut -d' ' -f1)"
+            git submodule status --recursive
+          } | tee ci-logs/build-identity.txt
+
+      - name: Build unsigned iOS device app (Anchor enabled)
+        script: |
+          set -euo pipefail
+
+          # Match PadMint's proven device-build safeguard: Codemagic's inherited
+          # SDKROOT can point CMake at macOS libraries during an iOS build.
+          : > ci-logs/build-env-sanitize.log
+          for var in SDKROOT CPATH LIBRARY_PATH; do
+            if value="$(printenv "$var" 2>/dev/null)"; then
+              echo "Removing inherited $var=$value" | tee -a ci-logs/build-env-sanitize.log
+              unset "$var"
+            else
+              echo "$var was not set" | tee -a ci-logs/build-env-sanitize.log
+            fi
+          done
+          for var in SDKROOT CPATH LIBRARY_PATH; do
+            if [ "${!var+x}" ]; then
+              echo "ERROR: $var is still set" | tee -a ci-logs/build-env-sanitize.log
+              exit 1
+            fi
+          done
+          echo "SDKROOT, CPATH and LIBRARY_PATH are unset for the iOS device build" | tee -a ci-logs/build-env-sanitize.log
+
+          collect_cmake_diagnostics() {
+            build_status=$?
+            trap - EXIT
+            set +e
+            mkdir -p ci-diagnostics
+            find build-ios-soh -type f \\
+              \\( -name CMakeCache.txt \\
+                 -o -name CMakeConfigureLog.yaml \\
+                 -o -name CMakeSystem.cmake \\
+                 -o -name CMakeCXXCompiler.cmake \\
+                 -o -name '*.LinkFileList' \\
+              \\) -print > ci-logs/cmake-diagnostic-file-list.txt 2>/dev/null
+            while IFS= read -r file; do
+              [ -f "$file" ] || continue
+              relative="${file#"$PWD"/}"
+              mkdir -p "ci-diagnostics/$(dirname "$relative")"
+              cp "$file" "ci-diagnostics/$relative"
+            done < ci-logs/cmake-diagnostic-file-list.txt
+            echo "build_step_exit_status=$build_status" > ci-diagnostics/build-step-status.txt
+            tar -czf ci-diagnostics.tar.gz ci-diagnostics
+            exit "$build_status"
+          }
+          trap collect_cmake_diagnostics EXIT
+
+          scripts/build-ios.sh --device 2>&1 | tee ci-logs/build-ios.log
+
+      - name: Verify Anchor and SDL2_net symbols
+        script: |
+          set -euo pipefail
+          app="$CM_BUILD_DIR/build-ios-soh/soh/Release-iphoneos/HarkinianPad.app"
+          binary="$app/HarkinianPad"
+          test -d "$app"
+          test -f "$binary"
+          test -f "$app/Info.plist"
+
+          # Use plain nm (not -g): keep the complete Mach-O symbol table available
+          # for this diagnostic check.
+          xcrun nm "$binary" > ci-logs/harkinianpad-nm.txt 2> ci-logs/nm-stderr.log
+
+          grep -F 'SDLNet_TCP_Open' ci-logs/harkinianpad-nm.txt > ci-logs/sdl2-net-symbols.txt
+          grep -F 'Anchor' ci-logs/harkinianpad-nm.txt > ci-logs/anchor-symbols.txt
+
+          lipo -info "$binary" | tee ci-logs/binary-architecture.txt
+          /usr/libexec/PlistBuddy -c 'Print :NSLocalNetworkUsageDescription' "$app/Info.plist" \\
+            | tee ci-logs/local-network-permission.txt
+          cp "$CM_BUILD_DIR/build-ios-soh/soh/Release-iphoneos/HarkinianPad.build.json" \\
+            ci-logs/HarkinianPad.build.json
+
+          {
+            echo "SDLNet_TCP_Open: found"
+            echo "Anchor symbols: found"
+            echo "Info.plist local-network usage description: present"
+            echo "App built successfully; no IPA was packaged or uploaded."
+          } | tee ci-logs/symbol-check.txt
+
+    artifacts:
+      - ci-logs/*
+      - ci-diagnostics.tar.gz
